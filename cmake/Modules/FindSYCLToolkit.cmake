@@ -97,22 +97,38 @@ find_file(
 # Define the old version of SYCL toolkit that is compatible with the current version of PyTorch.
 set(PYTORCH_2_5_SYCL_TOOLKIT_VERSION 20249999)
 
-# By default, we use libsycl.so on Linux and sycl.lib on Windows as the SYCL library name.
-if (SYCL_COMPILER_VERSION VERSION_LESS_EQUAL PYTORCH_2_5_SYCL_TOOLKIT_VERSION)
-  # Don't use if(WIN32) here since this requires cmake>=3.25 and file is installed
-  # and used by other projects.
-  # See: https://cmake.org/cmake/help/v3.25/variable/LINUX.html
-  if(CMAKE_SYSTEM_NAME MATCHES "Windows")
-    # On Windows, the SYCL library is named sycl7.lib until PYTORCH_2_5_SYCL_TOOLKIT_VERSION.
-    # sycl.lib is supported in the later version.
-    set(sycl_lib_suffix "7")
+if(NOT CMAKE_SYSTEM_NAME MATCHES "Windows")
+  # On Linux, use libsycl.so
+  set(sycl_library_name "sycl")
+else()
+  # On Windows, use sycl.lib (newer toolkit) or sycl7.lib (older toolkit),
+  # with debug variants sycld.lib / sycl7d.lib selected automatically for Debug builds.
+  if(SYCL_COMPILER_VERSION VERSION_LESS_EQUAL PYTORCH_2_5_SYCL_TOOLKIT_VERSION)
+    set(sycl_lib_base "sycl7")
+  else()
+    set(sycl_lib_base "sycl")
+  endif()
+
+  if(CMAKE_BUILD_TYPE MATCHES "Debug")
+    set(sycl_library_name "${sycl_lib_base}d")
+  else()
+    set(sycl_library_name "${sycl_lib_base}")
+  endif()
+endif()
+
+# If cache already contains a different config (e.g. sycl.lib from a previous
+# non-debug configure), force a re-search with the current candidate names.
+if(DEFINED SYCL_LIBRARY AND SYCL_LIBRARY)
+  get_filename_component(_sycl_library_cached_name "${SYCL_LIBRARY}" NAME_WE)
+  if(NOT _sycl_library_cached_name STREQUAL sycl_library_name)
+    unset(SYCL_LIBRARY CACHE)
   endif()
 endif()
 
 # Find SYCL library fullname.
 find_library(
   SYCL_LIBRARY
-  NAMES "sycl${sycl_lib_suffix}"
+  NAMES ${sycl_library_name}
   HINTS ${SYCL_LIBRARY_DIR}
   NO_DEFAULT_PATH
 )
