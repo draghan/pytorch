@@ -375,6 +375,7 @@ def _get_package_path(package_name: str) -> Path:
 
 BUILD_LIBTORCH_WHL = str2bool(os.getenv("BUILD_LIBTORCH_WHL"))
 BUILD_PYTHON_ONLY = str2bool(os.getenv("BUILD_PYTHON_ONLY"))
+PYTORCH_RUNTIME_ONLY_WHEEL = str2bool(os.getenv("PYTORCH_RUNTIME_ONLY_WHEEL"))
 
 if BUILD_PYTHON_ONLY:
     os.environ["BUILD_LIBTORCHLESS"] = "ON"
@@ -1158,6 +1159,24 @@ def configure_extension_build() -> tuple[
     includes = ["torch", "torch.*", "torchgen", "torchgen.*"]
     # exclude folders that they look like Python packages but are not wanted in wheels
     excludes = ["tools", "tools.*", "caffe2", "caffe2.*"]
+    if PYTORCH_RUNTIME_ONLY_WHEEL:
+        # `torchgen` is a code-generation framework used at build time
+        # (and by power users writing custom op codegen). It is not needed
+        # for plain inference / training at runtime.
+        excludes.extend(["torchgen", "torchgen.*"])
+        # CUDA Python stubs are unused on XPU/CPU-only deployments.
+        # `torch.cuda` is imported lazily; removing it is safe as long as
+        # nothing in the application path calls into it.
+        excludes.extend(
+            [
+                "torch.cuda",
+                "torch.cuda.*",
+                "torch.backends.cuda",
+                "torch.backends.cuda.*",
+                "torch.backends.cudnn",
+                "torch.backends.cudnn.*",
+            ]
+        )
     if cmake_cache_vars["BUILD_FUNCTORCH"]:
         includes.extend(["functorch", "functorch.*"])
     else:
@@ -1328,8 +1347,9 @@ def main() -> None:
             "lib/*.so*",
             "lib/*.dylib*",
             "lib/*.dll",
-            "lib/*.lib",
         ]
+        if not PYTORCH_RUNTIME_ONLY_WHEEL:
+            torch_package_data.append("lib/*.lib")
         # XXX: Why not use wildcards ["lib/aotriton.images/*", "lib/aotriton.images/**/*"] here?
         aotriton_image_path = TORCH_DIR / "lib" / "aotriton.images"
         aks2_files = [
@@ -1338,15 +1358,49 @@ def main() -> None:
             if file.is_file()
         ]
         torch_package_data += aks2_files
-    if get_cmake_cache_vars()["USE_TENSORPIPE"]:
+    if get_cmake_cache_vars()["USE_TENSORPIPE"] and not PYTORCH_RUNTIME_ONLY_WHEEL:
         torch_package_data += [
             "include/tensorpipe/*.h",
             "include/tensorpipe/**/*.h",
         ]
-    if get_cmake_cache_vars()["USE_KINETO"]:
+    if get_cmake_cache_vars()["USE_KINETO"] and not PYTORCH_RUNTIME_ONLY_WHEEL:
         torch_package_data += [
             "include/kineto/*.h",
             "include/kineto/**/*.h",
+        ]
+    if PYTORCH_RUNTIME_ONLY_WHEEL:
+        runtime_only_drop_patterns = {
+            "bin/*",
+            "bin/**/*",
+            "test/*",
+            "lib/*.pdb",
+            "lib/**/*.pdb",
+            "lib/*.h",
+            "lib/**/*.h",
+            "include/*.h",
+            "include/**/*.h",
+            "include/*.hpp",
+            "include/**/*.hpp",
+            "include/*.cuh",
+            "include/**/*.cuh",
+            "share/cmake/ATen/*.cmake",
+            "share/cmake/Caffe2/*.cmake",
+            "share/cmake/Caffe2/public/*.cmake",
+            "share/cmake/Caffe2/Modules_CUDA_fix/*.cmake",
+            "share/cmake/Caffe2/Modules_CUDA_fix/upstream/*.cmake",
+            "share/cmake/Caffe2/Modules_CUDA_fix/upstream/FindCUDA/*.cmake",
+            "share/cmake/Gloo/*.cmake",
+            "share/cmake/Tensorpipe/*.cmake",
+            "share/cmake/Torch/*.cmake",
+            # valgrind C++ benchmark wrapper sources/headers — dev-only.
+            "utils/benchmark/utils/*.cpp",
+            "utils/benchmark/utils/valgrind_wrapper/*.cpp",
+            "utils/benchmark/utils/valgrind_wrapper/*.h",
+        }
+        torch_package_data = [
+            pattern
+            for pattern in torch_package_data
+            if pattern not in runtime_only_drop_patterns
         ]
     torchgen_package_data = [
         "packaged/*",
@@ -1367,10 +1421,35 @@ def main() -> None:
     exclude_package_data = {
         "torch": exclude_windows_libs,
     }
+    if PYTORCH_RUNTIME_ONLY_WHEEL:
+        exclude_package_data["torch"] += [
+            # Catch any stray test executables that may have been left in
+            # torch/bin/ by a previous build (BUILD_TEST=OFF doesn't clean
+            # them retroactively).
+            "bin/*",
+            "bin/**/*",
+            # Test-only C++ libraries built from test/cpp/jit/CMakeLists.txt.
+            # They are normally guarded by INSTALL_TEST, but can leak into
+            # torch/lib/ from prior dirty builds.
+            "lib/torchbind_test.dll",
+            "lib/jitbackend_test.dll",
+            "lib/backend_with_compiler.dll",
+            "lib/libtorchbind_test.so",
+            "lib/libjitbackend_test.so",
+            "lib/libbackend_with_compiler.so",
+            "lib/libtorchbind_test.dylib",
+            "lib/libjitbackend_test.dylib",
+            "lib/libbackend_with_compiler.dylib",
+        ]
+    if not BUILD_LIBTORCH_WHL and PYTORCH_RUNTIME_ONLY_WHEEL:
+        # torchgen is excluded from the package list above; make sure none
+        # of its data files sneak in either.
+        exclude_package_data["torchgen"] = ["*", "**/*"]
 
     if not BUILD_LIBTORCH_WHL:
-        package_data["torchgen"] = torchgen_package_data
-        exclude_package_data["torchgen"] = ["*.py[co]"]
+        if not PYTORCH_RUNTIME_ONLY_WHEEL:
+            package_data["torchgen"] = torchgen_package_data
+            exclude_package_data["torchgen"] = ["*.py[co]"]
     else:
         # no extensions in BUILD_LIBTORCH_WHL mode
         ext_modules = []

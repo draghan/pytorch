@@ -83,6 +83,8 @@ install(FILES "${TORCH_SRC_DIR}/csrc/inductor/aoti_runtime/model.h"
 
 # Generated testing Python module (gitignored so not picked up by scikit-build-core
 # package scanning; install explicitly so it ends up in the wheel).
+# NOTE: torch.testing._internal is required at runtime by some PyTorch code paths
+# (e.g. dynamo/inductor utilities), so it is shipped even in runtime-only wheels.
 install(FILES "${TORCH_SRC_DIR}/testing/_internal/generated/annotated_fn_args.py"
   DESTINATION "testing/_internal/generated"
 )

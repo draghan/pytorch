@@ -244,6 +244,8 @@ option(BUILD_MOBILE_AUTOGRAD
        "Build autograd function in mobile build (in development)" OFF)
 cmake_dependent_option(INSTALL_TEST "Install test binaries if BUILD_TEST is on"
                        ON "BUILD_TEST" OFF)
+option(PYTORCH_RUNTIME_ONLY_WHEEL
+       "Optimize artifacts for runtime-only wheel packaging" OFF)
 option(USE_RELATIVE_PATHS "Use relative paths in generated files for ccache friendliness" OFF)
 option(USE_CPP_CODE_COVERAGE "Compile C/C++ with code coverage flags" OFF)
 option(USE_COLORIZE_OUTPUT "Colorize output during compilation" ON)
@@ -491,6 +493,13 @@ if(USE_GLOO_WITH_OPENSSL)
       CACHE STRING "")
 endif()
 
+if(PYTORCH_RUNTIME_ONLY_WHEEL)
+  # Runtime-only wheels do not ship test binaries.
+  set(BUILD_TEST OFF CACHE BOOL "Build C++ test binaries (need gtest and gbenchmark)" FORCE)
+  set(INSTALL_TEST OFF CACHE BOOL "Install test binaries if BUILD_TEST is on" FORCE)
+  set(ATEN_NO_TEST ON CACHE BOOL "Do not build ATen test binaries" FORCE)
+endif()
+
 # Linux distributions do not want too many embedded sources, in that sense we
 # need to be able to build pytorch with an (almost) empty third_party directory.
 # USE_SYSTEM_LIBS is a shortcut variable to toggle all the # USE_SYSTEM_*
@@ -695,6 +704,18 @@ if(MSVC)
   string(APPEND CMAKE_CXX_FLAGS " /FS")
   string(APPEND CMAKE_CUDA_FLAGS " -Xcompiler /FS")
 endif(MSVC)
+
+if(MSVC AND PYTORCH_RUNTIME_ONLY_WHEEL)
+  foreach(flag_var
+          CMAKE_SHARED_LINKER_FLAGS_RELEASE
+          CMAKE_MODULE_LINKER_FLAGS_RELEASE
+          CMAKE_EXE_LINKER_FLAGS_RELEASE
+          CMAKE_SHARED_LINKER_FLAGS_MINSIZEREL
+          CMAKE_MODULE_LINKER_FLAGS_MINSIZEREL
+          CMAKE_EXE_LINKER_FLAGS_MINSIZEREL)
+    string(APPEND ${flag_var} " /DEBUG:NONE")
+  endforeach()
+endif()
 
 string(APPEND CMAKE_CUDA_FLAGS " -Xfatbin -compress-all")
 
